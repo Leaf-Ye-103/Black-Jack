@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 import random
+from typing import Callable
 
 D = Decimal
 RANKS = ('A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K')
@@ -41,6 +42,43 @@ def amount(prompt, maximum=None, minimum=D('0')):
 class Player:
     name: str
     cash: Decimal
+    policy: Callable | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class Observation:
+    """Public information given to an optional automated player.
+
+    Monetary choices return Decimal amounts; play choices return an action string.
+    No dealer hole card, shoe order, or mutable game objects are exposed.
+    """
+    phase: str
+    cash: Decimal
+    cards: tuple[str, ...]
+    wager: Decimal
+    dealer_upcard: str | None
+    legal_actions: tuple[str, ...]
+    max_stake: Decimal
+    split: bool
+    running_count: int
+    cards_remaining: int
+
+
+def observation(phase, player, shoe, *, hand=None, upcard=None,
+                actions=(), max_stake=D(0)):
+    return Observation(phase, player.cash, tuple(hand.cards) if hand else (),
+                       hand.bet if hand else D(0), upcard, tuple(actions),
+                       max_stake, hand.split if hand else False,
+                       shoe.running_count, len(shoe.cards))
+
+
+def policy_stake(player, view, *, even_cents=False):
+    stake = player.policy(view)
+    if (not isinstance(stake, Decimal) or not stake.is_finite()
+            or stake < 0 or stake > view.max_stake
+            or stake % D('.01') or (even_cents and stake % D('.02'))):
+        raise ValueError('Policy must return a legal Decimal stake in cents.')
+    return stake
 
 
 @dataclass
@@ -52,16 +90,26 @@ class Hand:
 
 
 class Shoe:
-    def __init__(self):
+    def __init__(self, rng=None):
+        self.rng = rng if rng is not None else random
         self.cards = []
         self.shuffle()
 
     def shuffle(self):
         self.cards = list(RANKS) * 24  # Six decks, four suits per deck.
-        random.shuffle(self.cards)
+        self.rng.shuffle(self.cards)
+        self.running_count = 0
 
     def draw(self):
         return self.cards.pop()
+
+    def reveal(self, cards):
+        """Update a Hi-Lo count only when cards become public."""
+        for card in cards:
+            if card in ('2', '3', '4', '5', '6'):
+                self.running_count += 1
+            elif card in ('10', 'J', 'Q', 'K', 'A'):
+                self.running_count -= 1
 
 
 def settle(player, hand, dealer):
@@ -88,7 +136,8 @@ def settle(player, hand, dealer):
     return 'loss'
 
 
-def play_hand(player, hands, index, shoe):
+def play_hand(player, hands, index, shoe, *, upcard=None, verbose=True):
+    emit = print if verbose else lambda *args: None
     hand = hands[index]
     if not hand.split and natural(hand.cards):
         return
@@ -100,10 +149,16 @@ def play_hand(player, hands, index, shoe):
                 choices.append('split')
         if not hand.split and len(hand.cards) == 2:
             choices.append('surrender')
-        print(f'{player.name}, hand {index + 1}: {hand.cards} = {total(hand.cards)}; bet {money(hand.bet)}')
-        action = input(f"Choose {' / '.join(choices)}: ").strip().lower()
+        emit(f'{player.name}, hand {index + 1}: {hand.cards} = {total(hand.cards)}; bet {money(hand.bet)}')
+        if player.policy is None:
+            action = input(f"Choose {' / '.join(choices)}: ").strip().lower()
+        else:
+            action = player.policy(observation('play', player, shoe, hand=hand,
+                                               upcard=upcard, actions=choices))
+            if action not in choices:
+                raise ValueError(f'Policy returned an illegal action: {action!r}')
         if action not in choices:
-            print('Choose one of the displayed actions.')
+            emit('Choose one of the displayed actions.')
             continue
         if action == 'stand':
             return
@@ -114,6 +169,7 @@ def play_hand(player, hands, index, shoe):
             player.cash -= hand.bet
             hand.bet *= 2
             hand.cards.append(shoe.draw())
+            shoe.reveal(hand.cards[-1:])
             return
         if action == 'split':
             player.cash -= hand.bet
@@ -121,47 +177,61 @@ def play_hand(player, hands, index, shoe):
             hand.cards = [rank, shoe.draw()]
             hand.split = True
             new_hand = Hand([rank, shoe.draw()], hand.bet, split=True)
+            shoe.reveal([hand.cards[-1], new_hand.cards[-1]])
             hands.insert(index + 1, new_hand)
             if rank == 'A':
                 # Split aces receive exactly one card; no resplitting.
                 return
             continue
         hand.cards.append(shoe.draw())
+        shoe.reveal(hand.cards[-1:])
 
 
-def round_game(players, shoe):
+def round_game(players, shoe, *, verbose=True):
+    emit = print if verbose else lambda *args: None
     # A conservative cut card leaves enough for seven players with four hands.
     if len(shoe.cards) < 156:
         shoe.shuffle()
-        print('Shuffling the six-deck shoe.')
+        emit('Shuffling the six-deck shoe.')
     active = []
     for player in players:
         if player.cash < D('.02'):
-            print(f'{player.name} has insufficient funds to bet.')
+            emit(f'{player.name} has insufficient funds to bet.')
             continue
-        print(f'{player.name}: balance {money(player.cash)}')
-        bet = amount('Bet (0 to sit out; multiples of $0.02): ', player.cash)
-        while bet % D('.02'):
-            print('Use multiples of $0.02 so 3:2 payouts and surrender stay in cents.')
-            bet = amount('Bet (0 to sit out): ', player.cash)
+        emit(f'{player.name}: balance {money(player.cash)}')
+        if player.policy is not None:
+            bet = policy_stake(player, observation('bet', player, shoe,
+                                                  max_stake=player.cash), even_cents=True)
+        else:
+            bet = amount('Bet (0 to sit out; multiples of $0.02): ', player.cash)
+            while bet % D('.02'):
+                emit('Use multiples of $0.02 so 3:2 payouts and surrender stay in cents.')
+                bet = amount('Bet (0 to sit out): ', player.cash)
         if bet:
             player.cash -= bet
             active.append((player, [Hand([], bet)]))
     if not active:
-        print('Everyone sat out. No cards dealt.')
+        emit('Everyone sat out. No cards dealt.')
         return
     dealer = []
     for _ in range(2):
         for _, hands in active:
             hands[0].cards.append(shoe.draw())
         dealer.append(shoe.draw())
-    print(f'Dealer shows: {dealer[0]}')
+    for _, hands in active:
+        shoe.reveal(hands[0].cards)
+    shoe.reveal(dealer[:1])
+    emit(f'Dealer shows: {dealer[0]}')
     insurance = []
     if dealer[0] == 'A':
         for player, hands in active:
-            print(f'{player.name}: {hands[0].cards} = {total(hands[0].cards)}')
+            emit(f'{player.name}: {hands[0].cards} = {total(hands[0].cards)}')
             cap = min(player.cash, hands[0].bet / 2)
-            stake = amount(f'Insurance (0 to decline, up to {money(cap)}): ', cap)
+            if player.policy is not None:
+                stake = policy_stake(player, observation('insurance', player, shoe,
+                    hand=hands[0], upcard=dealer[0], max_stake=cap))
+            else:
+                stake = amount(f'Insurance (0 to decline, up to {money(cap)}): ', cap)
             player.cash -= stake
             insurance.append((player, stake))
     dealer_blackjack = natural(dealer)
@@ -169,14 +239,14 @@ def round_game(players, shoe):
         if dealer_blackjack:
             player.cash += stake * 3
         if stake:
-            print(f'{player.name}: insurance {"wins 2:1" if dealer_blackjack else "loses"}.')
+            emit(f'{player.name}: insurance {"wins 2:1" if dealer_blackjack else "loses"}.')
     if not dealer_blackjack:
         for player, hands in active:
             index = 0
             while index < len(hands):
                 hand = hands[index]
                 if not (hand.split and hand.cards[0] == 'A'):
-                    play_hand(player, hands, index, shoe)
+                    play_hand(player, hands, index, shoe, upcard=dealer[0], verbose=verbose)
                 index += 1
         needs_dealer = any(not h.surrendered and total(h.cards) <= 21
                            and not (natural(h.cards) and not h.split)
@@ -184,12 +254,13 @@ def round_game(players, shoe):
         if needs_dealer:
             while total(dealer) < 17:
                 dealer.append(shoe.draw())
-    print(f'Dealer: {dealer} = {total(dealer)}')
+    shoe.reveal(dealer[1:])
+    emit(f'Dealer: {dealer} = {total(dealer)}')
     for player, hands in active:
         for i, hand in enumerate(hands, 1):
             outcome = settle(player, hand, dealer)
-            print(f'{player.name}, hand {i}: {hand.cards} ({total(hand.cards)}) — {outcome}')
-        print(f'{player.name}: balance {money(player.cash)}')
+            emit(f'{player.name}, hand {i}: {hand.cards} ({total(hand.cards)}) — {outcome}')
+        emit(f'{player.name}: balance {money(player.cash)}')
 
 
 def main():
