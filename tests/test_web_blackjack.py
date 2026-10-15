@@ -8,8 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from blackjack import Shoe
-from web_blackjack import APIError, Table, make_server
+from blackjack import APIError, Shoe, Table, make_server
 
 
 def fixed_shoe(draws=()):
@@ -32,7 +31,7 @@ class TableTestCase(unittest.TestCase):
 
     def create(self, draws=(), **settings):
         self.shoe = fixed_shoe(draws)
-        with patch('web_blackjack.Shoe', return_value=self.shoe):
+        with patch('blackjack.Shoe', return_value=self.shoe):
             return self.table.new(configuration(**settings))
 
     def wait_for(self, predicate):
@@ -311,7 +310,7 @@ class BrowserHTTPTests(TableTestCase):
                 self.assertEqual(headers.get_content_type(), kind)
                 self.assertTrue(body)
         shoe = fixed_shoe(['A', '9', 'K', '8'])
-        with patch('web_blackjack.Shoe', return_value=shoe):
+        with patch('blackjack.Shoe', return_value=shoe):
             status, headers, body = self.request('/api/new', configuration())
         self.assertEqual(status, 200)
         self.assertEqual(headers.get_content_type(), 'application/json')
@@ -348,7 +347,7 @@ class BrowserHTTPTests(TableTestCase):
 
     def test_unknown_paths_and_source_traversal_do_not_expose_files(self):
         for path in ('/missing', '/../blackjack.py', '/%2e%2e/blackjack.py',
-                     '/blackjack.py', '/web/../web_blackjack.py'):
+                     '/blackjack.py', '/web/../blackjack.py'):
             with self.subTest(path=path):
                 status, headers, body = self.request(path)
                 self.assertEqual(status, 404)
