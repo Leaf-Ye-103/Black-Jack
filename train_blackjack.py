@@ -13,7 +13,8 @@ import random
 import statistics
 import sys
 
-from blackjack import Observation, Player, Shoe, money, round_game, total
+from blackjack import (BetLimits, LEGACY_LIMITS, Observation, Player, Shoe,
+                       add_bet_arguments, money, round_game, total)
 
 D = Decimal
 MODEL_VERSION = 1
@@ -34,6 +35,10 @@ class Settings:
     unit_bet: str = '10.00'
     rounds: int = 50
     players: int = 1
+    # Missing fields in version-1 models retain their original betting rules.
+    min_bet: str = '.02'
+    bet_increment: str = '.02'
+    max_bet: str | None = None
 
     def __post_init__(self):
         for name in ('bankroll', 'unit_bet'):
@@ -49,6 +54,11 @@ class Settings:
             raise ValueError('rounds must be a positive integer.')
         if not isinstance(self.players, int) or not 1 <= self.players <= 7:
             raise ValueError('players must be between 1 and 7.')
+        self.limits  # Validate the complete opening-bet configuration.
+
+    @property
+    def limits(self):
+        return BetLimits(self.min_bet, self.bet_increment, self.max_bet)
 
 
 def stake_actions(view, unit):
@@ -56,8 +66,15 @@ def stake_actions(view, unit):
     cap = cents(view.max_stake)
     if view.phase == 'insurance':
         return ['0', str(cap)] if cap > 0 else ['0']
-    cap -= cap % 2
-    return [str(v) for v in sorted({0, *(min(cap, cents(unit) * k) for k in (1, 2, 5))})]
+    if view.bet_limits == LEGACY_LIMITS:
+        # Preserve the exact action/state keys used by existing version-1 models.
+        cap -= cap % 2
+        return [str(v) for v in sorted({0, *(min(cap, cents(unit) * k) for k in (1, 2, 5))})]
+    funds = min(view.cash, view.max_stake)
+    limits = view.bet_limits
+    targets = [D(0), limits.minimum, limits.affordable_max(funds),
+               *(unit * k for k in (1, 2, 5))]
+    return [str(v) for v in sorted({cents(limits.snap(target, funds)) for target in targets})]
 
 
 def fallback(view, actions):
@@ -150,7 +167,7 @@ class FlatPolicy:
 
     def __call__(self, view):
         if view.phase == 'bet':
-            return cash(min(cents(self.unit), cents(view.cash) // 2 * 2))
+            return view.bet_limits.snap(self.unit, min(view.cash, view.max_stake))
         if view.phase == 'insurance':
             return D(0)
         return 'stand' if total(view.cards) >= 17 else 'hit'
@@ -163,6 +180,7 @@ def sit_out(view):
 def session(settings, policy, seed, *, verbose=False):
     """One finite episode; opponents have their own non-replenished bankrolls."""
     shoe = Shoe(random.Random(seed))
+    limits = settings.limits
     learner = Player('Model', D(settings.bankroll), policy)
     others = [Player(f'Player {i + 2}', D(settings.bankroll), FlatPolicy(D(settings.unit_bet)))
               for i in range(settings.players - 1)]
@@ -177,19 +195,21 @@ def session(settings, policy, seed, *, verbose=False):
 
     learner.policy = track
     for turn in range(settings.rounds):
-        if learner.cash < D('.02'):
+        if learner.cash < limits.minimum:
             break
         if isinstance(policy, MonteCarloAgent):
             policy.rounds_left = settings.rounds - turn
         if verbose:
             print(f'\nRound {turn + 1}/{settings.rounds}')
-        round_game([learner, *others], shoe, verbose=verbose)
+        round_game([learner, *others], shoe, verbose=verbose, limits=limits)
     return learner.cash, bet_rounds
 
 
 def train(settings, episodes, seed, *, progress=False):
     if episodes < 1:
         raise ValueError('episodes must be positive.')
+    if D(settings.bankroll) < settings.limits.minimum:
+        raise ValueError('Training bankroll must be at least the minimum opening bet.')
     agent = MonteCarloAgent(settings, seed=seed ^ 0xA11CE)
     agent.learning = True
     seeds = random.Random(seed)
@@ -218,7 +238,8 @@ def summary(finals, wagers, settings):
         'median_final_bankroll': statistics.median(float(f) for f in finals),
         'profitable_session_rate': sum(p > 0 for p in profits) / len(finals),
         'losing_session_rate': sum(p < 0 for p in profits) / len(finals),
-        'ruin_rate': sum(f < D('.02') for f in finals) / len(finals),
+        'ruin_rate': sum(f < settings.limits.minimum for f in finals) / len(finals),
+        'ruin_threshold': float(settings.limits.minimum),
         'mean_rounds_bet': statistics.mean(wagers),
     }
 
@@ -293,6 +314,8 @@ def write_report(report, path):
 
 def display_report(report):
     print('\nHeld-out evaluation (no learning during evaluation):')
+    print(f"Ruin means a bankroll below the minimum opening bet of "
+          f"{money(Settings(**report['settings']).limits.minimum)}.")
     for name, result in report['policies'].items():
         interval = result['profit_95pct_normal_ci']
         ci = f'[{interval[0]:.2f}, {interval[1]:.2f}]' if interval else 'unavailable (one session)'
@@ -315,7 +338,9 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     trainer = commands.add_parser('train', help='Train from simulated experience and evaluate.')
     trainer.add_argument('--bankroll', default='1000.00', help='Starting cash for each session.')
-    trainer.add_argument('--unit-bet', default='10.00', help='Base wager, in multiples of $0.02.')
+    trainer.add_argument('--unit-bet', default='10.00',
+                         help='Bet target and reward unit, in multiples of $0.02; targets are snapped to legal bets.')
+    add_bet_arguments(trainer)
     trainer.add_argument('--rounds', type=positive_int, default=50)
     trainer.add_argument('--players', type=int, choices=range(1, 8), default=1)
     trainer.add_argument('--episodes', type=positive_int, default=10000)
@@ -323,18 +348,19 @@ def main():
     trainer.add_argument('--seed', type=int, default=42)
     trainer.add_argument('--model', default='models/blackjack_model.json')
     trainer.add_argument('--report', default='reports/blackjack_evaluation.json')
-    evaluator = commands.add_parser('evaluate', help='Evaluate a saved model without updating it.')
+    evaluator = commands.add_parser('evaluate', help='Evaluate using the saved model\'s table limits.')
     evaluator.add_argument('--model', default='models/blackjack_model.json')
     evaluator.add_argument('--sessions', type=positive_int, default=1000)
     evaluator.add_argument('--seed', type=int, default=1000042)
     evaluator.add_argument('--report', default='reports/blackjack_evaluation.json')
-    player = commands.add_parser('play', help='Watch one automated session with a saved model.')
+    player = commands.add_parser('play', help='Watch a session using the saved model\'s table limits.')
     player.add_argument('--model', default='models/blackjack_model.json')
     player.add_argument('--seed', type=int, default=2000042)
     args = parser.parse_args()
     try:
         if args.command == 'train':
-            settings = Settings(args.bankroll, args.unit_bet, args.rounds, args.players)
+            settings = Settings(args.bankroll, args.unit_bet, args.rounds, args.players,
+                                args.min_bet, args.bet_increment, args.max_bet)
             agent = train(settings, args.episodes, args.seed, progress=True)
             save_model(agent, args.model, episodes=args.episodes, seed=args.seed)
             print(f'Saved model to {args.model}')

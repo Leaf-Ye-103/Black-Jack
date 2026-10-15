@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111c19">
+  <meta name="description" content="A local multiplayer blackjack table powered by the Python casino game.">
+  <title>Blackjack · The local table</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#controls">Skip to game controls</a>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Blackjack home">
+        <span class="brand-mark" aria-hidden="true">21</span>
+        <span><span class="brand-title">BLACKJACK</span><span class="brand-caption">THE LOCAL TABLE</span></span>
+      </a>
+      <div class="header-meta"><span class="local-dot" aria-hidden="true"></span><span>Play money · Local multiplayer</span></div>
+      <button type="button" class="button button-quiet" id="configure-button">Table settings <span aria-hidden="true">↗</span></button>
+    </header>
+
+    <main>
+      <div class="page-heading">
+        <div><p class="eyebrow">A SEAT AT THE TABLE</p><h1>A little strategy.<br class="mobile-break"> A little luck.</h1></div>
+        <div class="round-indicator"><span class="eyebrow">CURRENT ROUND</span><strong id="round-number">—</strong></div>
+      </div>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+      <div class="game-layout">
+        <section class="table-section" aria-label="Blackjack table">
+          <div class="table-topline"><span id="table-limits">$5 minimum · $500 maximum</span><span class="table-badge">6 DECKS</span></div>
+          <div class="felt-table">
+            <div class="table-stitch" aria-hidden="true"></div>
+            <section class="dealer-area" aria-label="Dealer hand">
+              <div class="hand-label"><span>DEALER</span><span id="dealer-total" class="total-badge" hidden></span></div>
+              <div class="cards dealer-cards" id="dealer-cards"><div class="empty-card" aria-hidden="true"></div><div class="empty-card" aria-hidden="true"></div></div>
+            </section>
+            <div class="table-wordmark" aria-hidden="true"><span class="wordmark-rule"></span><span>BLACKJACK PAYS <b>3 : 2</b></span><span class="wordmark-rule"></span></div>
+            <p class="table-subtitle">DEALER STANDS ON ALL 17s · INSURANCE PAYS 2 TO 1</p>
+            <div class="empty-table" id="empty-table"><span aria-hidden="true">◇</span><p>Your table is waiting.</p><small>Choose your players and take a seat.</small></div>
+            <div id="player-seats" class="player-seats" aria-label="Player hands"></div>
+          </div>
+          <div class="table-footnote"><span><span class="small-dot" aria-hidden="true"></span> Your bankroll. Your next move.</span><span>1–7 players · Shared table</span></div>
+        </section>
+
+        <aside class="control-panel" id="controls" tabindex="-1" aria-label="Game controls">
+          <div class="panel-heading"><span class="eyebrow" id="panel-eyebrow">WELCOME TO THE TABLE</span><span id="phase-badge" class="phase-badge">SETUP</span></div>
+          <h2 id="control-title">Make yourself at home.</h2>
+          <p class="control-description" id="control-description">Set the bankrolls and bet limits, then deal your first round.</p>
+          <p id="live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+
+          <section id="setup-controls">
+            <form id="setup-form" novalidate>
+              <label class="field-label" for="player-count">Players at the table</label>
+              <select id="player-count" name="player-count"><option value="1">1 player</option><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option><option value="5">5 players</option><option value="6">6 players</option><option value="7">7 players</option></select>
+              <div class="player-form-labels" aria-hidden="true"><span>PLAYER NAME</span><span>STARTING CASH ($)</span></div>
+              <div id="player-fields"></div>
+              <fieldset class="limit-fields"><legend>Opening bet limits</legend><div class="limits-grid">
+                <label for="minimum-bet">Minimum ($)<input id="minimum-bet" name="minimum" type="text" inputmode="decimal" value="5.00" autocomplete="off" required></label>
+                <label for="bet-increment">Step ($)<input id="bet-increment" name="increment" type="text" inputmode="decimal" value="1.00" autocomplete="off" required></label>
+                <label for="maximum-bet">Maximum ($)<input id="maximum-bet" name="maximum" type="text" inputmode="decimal" value="500.00" autocomplete="off" required></label>
+              </div><p class="field-help">Bets start at the minimum, then increase by the step. Enter 0 during betting to sit out.</p></fieldset>
+              <p class="inline-error" id="setup-error" role="alert" hidden></p>
+              <button class="button button-gold button-full" type="submit" data-server-action>Create table <span aria-hidden="true">→</span></button>
+              <button class="button button-quiet button-full" type="button" id="cancel-settings" hidden>Return to table</button>
+            </form>
+            <div class="restore-box" id="restore-box" hidden><p>A finished table was saved on this browser.</p><button type="button" class="text-button" id="restore-button">Load saved bankrolls &amp; settings</button><small>This starts a new table with a fresh six-deck shoe.</small></div>
+          </section>
+
+          <section id="bet-controls" hidden>
+            <div class="available-balance"><span>Available bankroll</span><strong id="available-cash">$0.00</strong></div>
+            <label class="field-label" for="bet-amount" id="bet-label">Your opening bet</label>
+            <div class="amount-control"><button class="amount-step" id="bet-decrease" type="button" aria-label="Decrease bet by one step">−</button><span class="currency-symbol" aria-hidden="true">$</span><input id="bet-amount" type="text" inputmode="decimal" value="5.00" autocomplete="off" aria-describedby="bet-help bet-error"><button class="amount-step" id="bet-increase" type="button" aria-label="Increase bet by one step">+</button></div>
+            <p class="field-help" id="bet-help"></p>
+            <div class="chip-selector" id="chip-selector" aria-label="Add chips to your bet"></div>
+            <div class="bet-tools"><button type="button" class="text-button" id="clear-bet">Clear bet</button><button type="button" class="text-button" id="max-bet">Maximum</button></div>
+            <p class="inline-error" id="bet-error" role="alert" hidden></p>
+            <button type="button" class="button button-gold button-full" id="place-bet" data-server-action>Place bet</button>
+            <button type="button" class="button button-outline button-full" id="sit-out" data-server-action>Sit out this round</button>
+          </section>
+
+          <section id="insurance-controls" hidden>
+            <p class="insurance-note">The dealer shows an ace. Insurance is a separate wager paying 2:1 if the dealer has blackjack.</p>
+            <label class="field-label" for="insurance-amount">Insurance amount ($)</label><input id="insurance-amount" type="text" inputmode="decimal" value="0.00" autocomplete="off" aria-describedby="insurance-help insurance-error">
+            <p class="field-help" id="insurance-help"></p>
+            <div class="insurance-options"><button type="button" class="button button-outline" id="insurance-zero">No insurance</button><button type="button" class="button button-outline" id="insurance-max">Full insurance</button></div>
+            <p class="inline-error" id="insurance-error" role="alert" hidden></p>
+            <button type="button" class="button button-gold button-full" id="place-insurance" data-server-action>Confirm insurance</button>
+          </section>
+
+          <section id="play-controls" hidden><div class="hand-summary" id="hand-summary"></div><div class="action-grid" id="action-buttons"></div><p class="keyboard-help">Keyboard: H hit · S stand · D double · P split · R surrender</p></section>
+          <section id="result-controls" hidden><div class="result-summary" id="result-summary"></div><button type="button" class="button button-gold button-full" id="new-round" data-server-action>Deal next round <span aria-hidden="true">→</span></button><p class="field-help centered">Each player can bet or sit out before cards are dealt.</p></section>
+          <section id="busy-controls" hidden><div class="busy-indicator"><span></span><span></span><span></span></div><p class="field-help centered">The table is playing. Your controls will appear here.</p></section>
+          <p class="local-note"><span aria-hidden="true">◇</span> Play money. No payments. No accounts.</p>
+        </aside>
+      </div>
+      <details class="rules-panel"><summary><span>Know the table</span><span class="rules-summary">The rules, at a glance <span aria-hidden="true">+</span></span></summary><div class="rules-grid"><div><h3>The deal</h3><p>Six decks. Beat the dealer without going over 21. Aces count as 1 or 11; face cards count as 10. The dealer stands on every 17, including soft 17.</p></div><div><h3>Your options</h3><p>Hit, stand, double on your first two cards, or split identical ranks into up to four hands. Split aces get one more card each and cannot be split again. Late surrender returns half your opening bet.</p></div><div><h3>The payout</h3><p>An initial, unsplit blackjack pays 3:2. Other wins pay 1:1. A tie returns your wager. Insurance pays 2:1. Opening bet limits apply before play; split and double wagers are additional.</p></div><div><h3>At your own pace</h3><p>Players share this browser and take turns. Your bankroll limits every wager. You can sit out a round with a $0 bet. Only card ranks are shown; suits do not affect blackjack.</p></div></div></details>
+    </main>
+    <footer><span>BLACKJACK <span class="footer-dot">·</span> Built for the next hand.</span><span>Casino rules vary. These are this table’s rules.</span></footer>
+    <noscript><p class="error-banner">Enable JavaScript to use this local blackjack table.</p></noscript>
+  </div>
+</body>
+</html>
