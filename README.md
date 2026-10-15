@@ -1,32 +1,12 @@
 # Blackjack
 
-A local blackjack game for 1–7 human players sharing a browser or terminal against a casino dealer, plus a reinforcement-learning trainer. Uses play money.
+A Python blackjack game for 1–7 players against a casino dealer, plus a reinforcement-learning trainer. Uses play money.
 
-`blackjack.py` is the shared game file: it contains the rules engine, terminal game, and browser server. `train_blackjack.py` imports this same engine for training and evaluation. Keep the `web/` directory beside `blackjack.py`; it supplies the browser's HTML, styles, and scripts.
+`blackjack.py` contains the shared rules engine and optional terminal game. `train_blackjack.py` imports this same engine for training and evaluation. Importing either module does not start a game.
 
 ## Play
 
 Requires Python 3.10 or newer; no packages or services are needed.
-
-### Browser table
-
-```sh
-python3 blackjack.py web
-```
-
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser. Set up 1–7 local players with names and starting cash, then choose the table's minimum, increment, and maximum bets. The defaults are $5, $1, and $500. Players share the same browser and take turns using chip controls and the available hand actions: hit, stand, double, split, surrender, and insurance. The dealer's hole card stays hidden until the rules require its reveal.
-
-The server keeps the active game in memory until it stops. Browser local storage saves table setup and balances from settled rounds. Explicitly restoring these starts a table with a fresh shoe; it does not resume a saved hand or the previous shoe.
-
-Change the listening address or port when needed:
-
-```sh
-python3 blackjack.py web --host 127.0.0.1 --port 8080
-```
-
-The browser layout takes design guidance from [vegas-games-extension](https://github.com/alpharomercoma/vegas-games-extension). Its interface and artwork are original; no source or artwork was copied. That reference uses a dealer-hits-soft-17 rule; this game's dealer continues to **stand on soft 17**, as specified below.
-
-### Terminal game
 
 ```sh
 python3 blackjack.py play
@@ -66,7 +46,9 @@ All players act against the same dealer; player count changes the shared card fl
 
 `train_blackjack.py` learns from simulated games without labeled examples. This is reinforcement learning: first-visit Monte Carlo control estimates action values from the final bankroll of completed sessions. Its objective is to maximize **expected final bankroll over a fixed number of rounds**, given starting funds. It does not guarantee the best strategy or profitable play.
 
-The trainer calls the shared `blackjack.py` engine through a decision callback, so dealing, legal actions, cash accounting, and payouts use the same rules as the browser and terminal games. Existing saved models remain supported. Browser setup is independent of a model's saved training settings; use matching settings when comparing play and evaluation. Each training episode starts a fresh shoe and resets every player's bankroll. `--players` counts everyone at the table (1–7): the learner occupies seat 1, and the remaining seats use simple bots that target a one-unit bet within the table limits, decline insurance, and hit until 17. Bots' funds are not replenished during a session.
+The trainer calls the shared `blackjack.py` engine through a decision callback, so dealing, legal actions, cash accounting, and payouts use the same rules as the terminal game. Existing saved models remain supported. Each training episode starts a fresh shoe and resets every player's bankroll. `--players` counts everyone at the table (1–7): the learner occupies seat 1, and the remaining seats use simple bots that target a one-unit bet within the table limits, decline insurance, and hit until 17. Bots' funds are not replenished during a session.
+
+For your own Python policies, use `Player`, `Shoe`, `BetLimits`, and `round_game` from `blackjack.py`. A player's optional `policy` callback receives an `Observation` containing public information and returns a legal wager or playing action. Set `verbose=False` on `round_game` for silent simulation; automated players do not require terminal input.
 
 The learner chooses among these actions:
 
